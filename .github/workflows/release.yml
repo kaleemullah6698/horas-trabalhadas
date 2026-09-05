@@ -79,12 +79,16 @@ jobs:
           echo 'ok: archive layout is correct'
 
       - name: Publish the release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: Horas Trabalhadas ${{ github.ref_name }}
-          files: dist/horas-trabalhadas.zip
-          generate_release_notes: true
-          draft: false
-          prerelease: false
+        # The GitHub CLI is preinstalled on GitHub-hosted runners, so the release
+        # is published without depending on a third-party action. One less
+        # external dependency in the path that produces the package customers
+        # install is worth the slightly longer step.
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/horas-trabalhadas.zip \
+            --title "Horas Trabalhadas ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --verify-tag
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
