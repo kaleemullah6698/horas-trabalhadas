@@ -1,0 +1,659 @@
+/* ============================================================
+   Horas Trabalhadas — lógica da calculadora (pt-BR / pt-PT / en)
+   ============================================================ */
+(function () {
+  "use strict";
+  // Scope all lookups to the plugin container so nothing leaks into the host page.
+  const appRoot = document.getElementById('htrb-app');
+  if (!appRoot) return;
+
+  /* -----------------------------------------------------------
+     Runtime configuration supplied by WordPress (class-assets.php).
+     Every field is optional: the calculator still works standalone
+     if the inline config is missing or stripped by an optimiser.
+     ----------------------------------------------------------- */
+  const CFG = (window.horasTrabalhadasCfg && typeof window.horasTrabalhadasCfg === 'object')
+    ? window.horasTrabalhadasCfg : {};
+
+  /**
+   * "Today" in the site's configured timezone rather than the visitor's.
+   *
+   * The calculator runs in the browser, so without this an employee opening the
+   * timesheet from another country — or with a wrong device clock — would get a
+   * different week than their employer. Intl is used with the IANA zone name so
+   * DST and historical rule changes come from the browser's own timezone
+   * database; the numeric UTC offset is the fallback for sites configured by
+   * offset instead of by city, and for browsers without Intl.
+   */
+  function siteToday() {
+    const now = new Date();
+    if (CFG.timezone) {
+      try {
+        // en-CA formats as YYYY-MM-DD, which splits unambiguously below.
+        const ymd = new Intl.DateTimeFormat('en-CA', {
+          timeZone: CFG.timezone, year: 'numeric', month: '2-digit', day: '2-digit'
+        }).format(now);
+        const p = ymd.split('-').map(Number);
+        if (p.length === 3 && p.every(n => !isNaN(n))) return new Date(p[0], p[1] - 1, p[2]);
+      } catch (e) { /* Unknown zone or no Intl — fall through to the offset. */ }
+    }
+    if (typeof CFG.utcOffset === 'number') {
+      const utcMs = now.getTime() + (now.getTimezoneOffset() * 60000);
+      const site = new Date(utcMs + (CFG.utcOffset * 3600000));
+      return new Date(site.getFullYear(), site.getMonth(), site.getDate());
+    }
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  }
+  const $ = s => appRoot.querySelector(s);
+  const el = (t, p = {}) => Object.assign(document.createElement(t), p);
+
+  /* -----------------------------------------------------------
+     Internationalisation. Default language is Portuguese — never
+     English. English is available only via the language selector.
+     ----------------------------------------------------------- */
+  const I18N = {
+    'pt-BR': {
+      sub: 'Intervalos · horas extras · pagamento · líquido · gorjetas · exportar',
+      theme: 'Tema', top: 'Topo',
+      f_preset: 'Período', o_thisWeek: 'Esta semana', o_lastWeek: 'Semana passada',
+      o_thisBiweek: 'Estas 2 semanas', o_thisMonth: 'Este mês', o_custom: 'Período personalizado',
+      f_start: 'Data inicial', f_end: 'Data final', f_weekStarts: 'Semana começa em',
+      o_mon: 'Segunda-feira', o_sun: 'Domingo', o_sat: 'Sábado',
+      f_timeFormat: 'Formato de hora', o_12h: '12 horas (am/pm)', o_24h: '24 horas',
+      f_currencyRate: 'Moeda e valor/hora', f_label: 'Rótulo (opcional)', ph_label: 'ex.: Ana — julho de 2026',
+      f_otRule: 'Regra de horas extras', o_none: 'Nenhuma', o_weekly40: 'Semanal >40h', o_daily: 'Limite diário',
+      o_ca: 'Califórnia (8h/40h/12h)', o_ak: 'Alasca (8h/40h)', o_nv: 'Nevada (8h/40h)',
+      f_dailyOt: 'Hora extra diária após (h)', f_otMult: 'Multiplicador de HE (×)', f_dtAfter: 'Dobro após (h)',
+      w_optional: 'opcional', ph_dt: 'ex.: 12', f_tax: 'Impostos / descontos (%)',
+      b_setDefault: 'Definir horas padrão', b_clearAll: 'Limpar tudo',
+      k_total: 'Total de horas', k_regular: 'Normais', k_overtime: 'Horas extras',
+      k_gross: 'Pagamento bruto', k_net: 'Líquido (após impostos)',
+      th_day: 'Dia', th_start: 'Início', th_end: 'Fim', th_break: 'Intervalo (min)', th_tips: 'Gorjetas',
+      th_work: 'Tempo trabalhado', tf_weeklyTotal: 'Total semanal',
+      r_breakdown: 'Resumo dos resultados', r_saveExport: 'Salvar e exportar', r_staysBrowser: 'fica no seu navegador',
+      b_save: 'Salvar', b_csv: 'CSV', b_print: 'Imprimir / PDF', b_copyLink: 'Copiar link',
+      r_savedEntries: 'Entradas salvas', r_nothingSaved: 'Nada salvo ainda.', faq_title: 'Como funciona',
+      faq1: '<strong>Horas</strong> = (Fim − Início) − Intervalo, por dia, somadas no período. Turnos noturnos são tratados automaticamente.',
+      faq2: '<strong>Horas extras</strong> suportam semanal (>40h), um limite diário personalizado e regras reais dos EUA (Califórnia 8h/dia + dobro após 12h, Alasca, Nevada).',
+      faq3: '<strong>Pagamento</strong> = normais × valor + extras × valor × multiplicador (+ dobro) + gorjetas. <strong>Líquido</strong> aplica seus impostos / descontos %.',
+      faq4: '<strong>Tudo funciona offline</strong> — sem login, os dados ficam no seu navegador. Salve vários funcionários, exporte CSV, imprima em PDF ou copie um link compartilhável.',
+      bd_total: 'Total de horas', bd_regular: 'Horas normais', bd_overtime: 'Horas extras (×{m})',
+      bd_doubletime: 'Dobro (×2)', bd_regularPay: 'Pagamento normal', bd_tips: 'Gorjetas', bd_gross: 'Pagamento bruto',
+      bd_afterTax: 'Após impostos / descontos ({p}%)', bd_totalTips: 'Total de gorjetas',
+      bd_enterRate: 'Informe um valor por hora', bd_toSeePay: 'para ver o pagamento',
+      days_word: 'dias',
+      tt_deleted: 'Excluído', tt_loaded: 'Carregado: {n}', tt_filled: '{n} dias preenchidos', tt_cleared: 'Limpo',
+      tt_saved: 'Salvo', tt_csv: 'CSV baixado', tt_linkCopied: 'Link copiado!', tt_parseErr: 'Não foi possível interpretar os horários',
+      pr_startTime: 'Horário de INÍCIO padrão (ex.: 9:00 am ou 09:00)',
+      pr_endTime: 'Horário de FIM padrão (ex.: 5:00 pm ou 17:00)',
+      pr_break: 'Minutos de INTERVALO padrão',
+      pr_skipWknd: 'Pular fins de semana? OK = pular, Cancelar = preencher todos os dias',
+      pr_copyLink: 'Copie o link:',
+      b_load: 'Carregar', ti_delete: 'Excluir', entry_prefix: 'Entrada',
+      a_hour: 'hora', a_minute: 'minuto', a_ampm: 'am/pm',
+      a_field_for: '{f} — {d}', a_load_entry: 'Carregar {n}', a_delete_entry: 'Excluir {n}',
+      dow: ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'],
+      mon: ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
+    },
+    'pt-PT': {
+      sub: 'Pausas · horas extra · pagamento · líquido · gorjetas · exportar',
+      theme: 'Tema', top: 'Topo',
+      f_preset: 'Período', o_thisWeek: 'Esta semana', o_lastWeek: 'Semana anterior',
+      o_thisBiweek: 'Estas 2 semanas', o_thisMonth: 'Este mês', o_custom: 'Período personalizado',
+      f_start: 'Data de início', f_end: 'Data de fim', f_weekStarts: 'Semana começa',
+      o_mon: 'Segunda-feira', o_sun: 'Domingo', o_sat: 'Sábado',
+      f_timeFormat: 'Formato de hora', o_12h: '12 horas (am/pm)', o_24h: '24 horas',
+      f_currencyRate: 'Moeda e valor/hora', f_label: 'Etiqueta (opcional)', ph_label: 'ex.: Ana — julho de 2026',
+      f_otRule: 'Regra de horas extra', o_none: 'Nenhuma', o_weekly40: 'Semanal >40h', o_daily: 'Limite diário',
+      o_ca: 'Califórnia (8h/40h/12h)', o_ak: 'Alasca (8h/40h)', o_nv: 'Nevada (8h/40h)',
+      f_dailyOt: 'Horas extra diárias após (h)', f_otMult: 'Multiplicador de HE (×)', f_dtAfter: 'Dobro após (h)',
+      w_optional: 'opcional', ph_dt: 'ex.: 12', f_tax: 'Impostos / descontos (%)',
+      b_setDefault: 'Definir horas por omissão', b_clearAll: 'Limpar tudo',
+      k_total: 'Total de horas', k_regular: 'Normais', k_overtime: 'Horas extra',
+      k_gross: 'Pagamento bruto', k_net: 'Líquido (após impostos)',
+      th_day: 'Dia', th_start: 'Início', th_end: 'Fim', th_break: 'Pausa (min)', th_tips: 'Gorjetas',
+      th_work: 'Tempo de trabalho', tf_weeklyTotal: 'Total semanal',
+      r_breakdown: 'Detalhe dos resultados', r_saveExport: 'Guardar e exportar', r_staysBrowser: 'fica no seu navegador',
+      b_save: 'Guardar', b_csv: 'CSV', b_print: 'Imprimir / PDF', b_copyLink: 'Copiar ligação',
+      r_savedEntries: 'Entradas guardadas', r_nothingSaved: 'Ainda nada guardado.', faq_title: 'Como funciona',
+      faq1: '<strong>Horas</strong> = (Fim − Início) − Pausa, por dia, somadas no período. Turnos noturnos são tratados automaticamente.',
+      faq2: '<strong>Horas extra</strong> suportam semanal (>40h), um limite diário personalizado e regras reais dos EUA (Califórnia 8h/dia + dobro após 12h, Alasca, Nevada).',
+      faq3: '<strong>Pagamento</strong> = normais × valor + extra × valor × multiplicador (+ dobro) + gorjetas. <strong>Líquido</strong> aplica os seus impostos / descontos %.',
+      faq4: '<strong>Tudo funciona offline</strong> — sem sessão, os dados ficam no seu navegador. Guarde vários trabalhadores, exporte CSV, imprima em PDF ou copie uma ligação partilhável.',
+      bd_total: 'Total de horas', bd_regular: 'Horas normais', bd_overtime: 'Horas extra (×{m})',
+      bd_doubletime: 'Dobro (×2)', bd_regularPay: 'Pagamento normal', bd_tips: 'Gorjetas', bd_gross: 'Pagamento bruto',
+      bd_afterTax: 'Após impostos / descontos ({p}%)', bd_totalTips: 'Total de gorjetas',
+      bd_enterRate: 'Indique um valor por hora', bd_toSeePay: 'para ver o pagamento',
+      days_word: 'dias',
+      tt_deleted: 'Eliminado', tt_loaded: 'Carregado: {n}', tt_filled: '{n} dias preenchidos', tt_cleared: 'Limpo',
+      tt_saved: 'Guardado', tt_csv: 'CSV transferido', tt_linkCopied: 'Ligação copiada!', tt_parseErr: 'Não foi possível interpretar os horários',
+      pr_startTime: 'Hora de INÍCIO por omissão (ex.: 9:00 am ou 09:00)',
+      pr_endTime: 'Hora de FIM por omissão (ex.: 5:00 pm ou 17:00)',
+      pr_break: 'Minutos de PAUSA por omissão',
+      pr_skipWknd: 'Ignorar fins de semana? OK = ignorar, Cancelar = preencher todos os dias',
+      pr_copyLink: 'Copie a ligação:',
+      b_load: 'Carregar', ti_delete: 'Eliminar', entry_prefix: 'Entrada',
+      a_hour: 'hora', a_minute: 'minuto', a_ampm: 'am/pm',
+      a_field_for: '{f} — {d}', a_load_entry: 'Carregar {n}', a_delete_entry: 'Eliminar {n}',
+      dow: ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'],
+      mon: ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
+    },
+    'en': {
+      sub: 'Breaks · overtime · pay · net · tips · export',
+      theme: 'Theme', top: 'Top',
+      f_preset: 'Date preset', o_thisWeek: 'This week', o_lastWeek: 'Last week',
+      o_thisBiweek: 'This 2 weeks', o_thisMonth: 'This month', o_custom: 'Custom range',
+      f_start: 'Start date', f_end: 'End date', f_weekStarts: 'Week starts',
+      o_mon: 'Monday', o_sun: 'Sunday', o_sat: 'Saturday',
+      f_timeFormat: 'Time format', o_12h: '12-hour (am/pm)', o_24h: '24-hour',
+      f_currencyRate: 'Currency & rate', f_label: 'Label (optional)', ph_label: 'e.g. Anna — July 2026',
+      f_otRule: 'Overtime rule', o_none: 'None', o_weekly40: 'Weekly >40h', o_daily: 'Daily threshold',
+      o_ca: 'California (8h/40h/12h)', o_ak: 'Alaska (8h/40h)', o_nv: 'Nevada (8h/40h)',
+      f_dailyOt: 'Daily OT after (h)', f_otMult: 'OT multiplier (×)', f_dtAfter: 'Double-time after (h)',
+      w_optional: 'optional', ph_dt: 'e.g. 12', f_tax: 'Tax / deductions (%)',
+      b_setDefault: 'Set default hours', b_clearAll: 'Clear all',
+      k_total: 'Total hours', k_regular: 'Regular', k_overtime: 'Overtime',
+      k_gross: 'Gross pay', k_net: 'Net (after tax)',
+      th_day: 'Day', th_start: 'Start', th_end: 'End', th_break: 'Break (min)', th_tips: 'Tips',
+      th_work: 'Work time', tf_weeklyTotal: 'Weekly total',
+      r_breakdown: 'Results breakdown', r_saveExport: 'Save & export', r_staysBrowser: 'stays in your browser',
+      b_save: 'Save', b_csv: 'CSV', b_print: 'Print / PDF', b_copyLink: 'Copy link',
+      r_savedEntries: 'Saved entries', r_nothingSaved: 'Nothing saved yet.', faq_title: 'How it works',
+      faq1: '<strong>Hours</strong> = (End − Start) − Break, per day, summed for the range. Overnight shifts are handled automatically.',
+      faq2: '<strong>Overtime</strong> supports weekly (>40h), a custom daily threshold, and real US state rules (California 8h/day + double-time after 12h, Alaska, Nevada).',
+      faq3: '<strong>Pay</strong> = regular × rate + OT × rate × multiplier (+ double-time) + tips. <strong>Net</strong> applies your tax / deduction %.',
+      faq4: '<strong>Everything is offline</strong> — no login, data stays in your browser. Save multiple employees, export CSV, print to PDF, or copy a shareable link.',
+      bd_total: 'Total hours', bd_regular: 'Regular hours', bd_overtime: 'Overtime (×{m})',
+      bd_doubletime: 'Double-time (×2)', bd_regularPay: 'Regular pay', bd_tips: 'Tips', bd_gross: 'Gross pay',
+      bd_afterTax: 'After tax / deductions ({p}%)', bd_totalTips: 'Total tips',
+      bd_enterRate: 'Enter an hourly rate', bd_toSeePay: 'to see pay',
+      days_word: 'days',
+      tt_deleted: 'Deleted', tt_loaded: 'Loaded: {n}', tt_filled: 'Filled {n} days', tt_cleared: 'Cleared',
+      tt_saved: 'Saved', tt_csv: 'CSV downloaded', tt_linkCopied: 'Link copied!', tt_parseErr: 'Could not parse times',
+      pr_startTime: 'Default START time (e.g. 9:00 am or 09:00)',
+      pr_endTime: 'Default END time (e.g. 5:00 pm or 17:00)',
+      pr_break: 'Default BREAK minutes',
+      pr_skipWknd: 'Skip weekends? OK = skip, Cancel = fill all days',
+      pr_copyLink: 'Copy link:',
+      b_load: 'Load', ti_delete: 'Delete', entry_prefix: 'Entry',
+      a_hour: 'hour', a_minute: 'minute', a_ampm: 'am/pm',
+      a_field_for: '{f} — {d}', a_load_entry: 'Load {n}', a_delete_entry: 'Delete {n}',
+      dow: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
+      mon: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    }
+  };
+  const CUR_DEFAULT = { 'pt-BR': 'R$', 'pt-PT': '€', 'en': '$' };
+
+  let LOCALE = 'pt-BR';
+  let langSel = null;
+  const L = () => I18N[LOCALE] || I18N['pt-BR'];
+  const t = k => { const d = L(); return d[k] != null ? d[k] : (I18N.en[k] != null ? I18N.en[k] : k); };
+  const fmt = (str, map) => String(str).replace(/\{(\w+)\}/g, (_, k) => (map[k] != null ? map[k] : ''));
+
+  function detectLocale() {
+    const saved = localStorage.getItem(LS_LANG);
+    if (saved && I18N[saved]) return saved;
+    const nav = (navigator.language || '').toLowerCase();
+    if (nav.indexOf('pt-pt') === 0) return 'pt-PT';
+    if (nav.indexOf('pt') === 0) return 'pt-BR';
+    return 'pt-BR'; // Default is Portuguese — never English.
+  }
+
+  function applyI18n() {
+    const d = L();
+    appRoot.querySelectorAll('[data-i18n]').forEach(n => { const k = n.getAttribute('data-i18n'); if (d[k] != null) n.textContent = d[k]; });
+    appRoot.querySelectorAll('[data-i18n-ph]').forEach(n => { const k = n.getAttribute('data-i18n-ph'); if (d[k] != null) n.setAttribute('placeholder', d[k]); });
+    appRoot.querySelectorAll('[data-i18n-html]').forEach(n => { const k = n.getAttribute('data-i18n-html'); if (d[k] != null) n.innerHTML = d[k]; });
+    // Keep aria-label in sync for elements whose accessible name must survive
+    // before JS runs (deferred script) and for AI agent accessibility audits.
+    const preset = $('#preset'); if (preset && d['f_preset']) preset.setAttribute('aria-label', d['f_preset']);
+    const startDate = $('#startDate'); if (startDate && d['f_start']) startDate.setAttribute('aria-label', d['f_start']);
+  }
+
+  function setLocale(loc, persist) {
+    LOCALE = I18N[loc] ? loc : 'pt-BR';
+    if (persist) localStorage.setItem(LS_LANG, LOCALE);
+    if (langSel) langSel.value = LOCALE;
+    applyI18n();
+    if (persist) $('#currency').value = CUR_DEFAULT[LOCALE] || '$';
+    renderRows(); recalc(); renderSaved();
+  }
+
+  // The icon set is rendered server-side as inline SVG. Only the delete button in
+  // the saved-entries list is created at runtime, so it carries its own markup —
+  // no icon library is loaded or executed on the page.
+  const TRASH_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" class="icon-sm"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>';
+
+  /*
+     localStorage keys. The pre-2.0 names are migrated on first load and then
+     left in place: they are not deleted, so a visitor rolled back to the old
+     version keeps their saved timesheets. Nothing here reaches the server —
+     every timesheet stays in the visitor's own browser.
+  */
+  const LS_KEY = 'horas_trabalhadas_saved_v1';
+  const LS_THEME = 'horas_trabalhadas_theme';
+  const LS_LANG = 'horas_trabalhadas_lang';
+  const LEGACY_KEYS = { 'whc_pro_saved_v1': LS_KEY, 'whc_theme': LS_THEME, 'whp_lang': LS_LANG };
+
+  function migrateStorage() {
+    try {
+      for (const oldKey in LEGACY_KEYS) {
+        const newKey = LEGACY_KEYS[oldKey];
+        if (localStorage.getItem(newKey) === null) {
+          const legacy = localStorage.getItem(oldKey);
+          if (legacy !== null) localStorage.setItem(newKey, legacy);
+        }
+      }
+    } catch (e) { /* Private mode or storage disabled — nothing to migrate. */ }
+  }
+  migrateStorage();
+  const STATE_RULES = { ca: { daily: 8, dt: 12 }, ak: { daily: 8, dt: null }, nv: { daily: 8, dt: null } };
+
+  let days = [];
+
+  const fmtDate = d => {
+    const mon = L().mon[d.getMonth()];
+    return LOCALE === 'en' ? `${mon} ${d.getDate()}, ${d.getFullYear()}` : `${d.getDate()} ${mon} ${d.getFullYear()}`;
+  };
+  const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const parseISO = s => { const [y, m, dd] = s.split('-').map(Number); return new Date(y, m - 1, dd); };
+  function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+  function startOfWeek(d, ws) { const x = new Date(d); const diff = (x.getDay() - ws + 7) % 7; x.setDate(x.getDate() - diff); return x; }
+
+  function computeRange() {
+    const preset = $('#preset').value;
+    const ws = +$('#weekStart').value;
+    // Resolved in the site's timezone (see siteToday), not the visitor's device.
+    const today = siteToday(); today.setHours(0, 0, 0, 0);
+    let s, e;
+    if (preset === 'thisWeek') { s = startOfWeek(today, ws); e = addDays(s, 6); }
+    else if (preset === 'lastWeek') { s = addDays(startOfWeek(today, ws), -7); e = addDays(s, 6); }
+    else if (preset === 'thisBiweek') { s = startOfWeek(today, ws); e = addDays(s, 13); }
+    else if (preset === 'thisMonth') { s = new Date(today.getFullYear(), today.getMonth(), 1); e = new Date(today.getFullYear(), today.getMonth() + 1, 0); }
+    else { s = parseISO($('#startDate').value || iso(startOfWeek(today, ws))); e = parseISO($('#endDate').value || iso(addDays(s, 6))); }
+    if (e < s) [s, e] = [e, s];
+    if ((e - s) / 864e5 > 61) e = addDays(s, 61);
+    $('#startDate').value = iso(s); $('#endDate').value = iso(e);
+    return { s, e };
+  }
+
+  function buildDays(preserve = true) {
+    const { s, e } = computeRange();
+    const old = {}; if (preserve) days.forEach(d => old[iso(d.date)] = d);
+    days = [];
+    for (let d = new Date(s); d <= e; d = addDays(d, 1)) {
+      const key = iso(d);
+      days.push(old[key] ? { ...old[key], date: new Date(d) } :
+        { date: new Date(d), start: { h: '', m: '00', ap: 'am' }, end: { h: '', m: '00', ap: 'am' }, brk: '', tips: '' });
+    }
+    renderRows();
+    recalc();
+  }
+
+  // Accessible name for a control inside a table row, e.g. "Inicio - hora - 12 jul 2026".
+  // Column headers alone do not give a form control an accessible name, so each
+  // generated input states its own field, sub-field and day.
+  const fieldName = (colKey, part, day) =>
+    fmt(t('a_field_for'), { f: t(colKey) + (part ? ' — ' + t(part) : ''), d: fmtDate(day.date) });
+
+  function timeInput(day, which) {
+    const t2 = day[which];
+    const colKey = which === 'start' ? 'th_start' : 'th_end';
+    const is12 = $('#timeFormat').value === '12';
+    const wrap = el('div', { className: 'time-field' });
+    const h = el('input', { type: 'number', min: 0, max: is12 ? 12 : 23, value: t2.h, placeholder: '--', className: 'input-sm' });
+    h.setAttribute('aria-label', fieldName(colKey, 'a_hour', day));
+    const col = el('span', { className: 'sep', textContent: ':' });
+    col.setAttribute('aria-hidden', 'true');
+    const m = el('input', { type: 'number', min: 0, max: 59, value: t2.m, className: 'input-sm' });
+    m.setAttribute('aria-label', fieldName(colKey, 'a_minute', day));
+    wrap.append(h, col, m);
+    let ap;
+    if (is12) {
+      ap = el('select', { className: 'input-sm', style: 'width:56px;' });
+      ap.setAttribute('aria-label', fieldName(colKey, 'a_ampm', day));
+      ['am', 'pm'].forEach(o => ap.append(el('option', { value: o, textContent: o, selected: t2.ap === o })));
+      wrap.append(ap);
+    }
+    const upd = () => { t2.h = h.value; t2.m = (m.value === '' ? '00' : String(m.value).padStart(2, '0')); if (ap) t2.ap = ap.value; recalc(); };
+    [h, m].forEach(i => i.addEventListener('input', upd)); if (ap) ap.addEventListener('change', upd);
+    return wrap;
+  }
+
+  function renderRows() {
+    const tb = $('#rows');
+    tb.textContent = '';
+    // Build off-document so the browser lays the table out once instead of once
+    // per row.
+    const frag = document.createDocumentFragment();
+    days.forEach(day => {
+      const tr = el('tr'); const dow = day.date.getDay();
+      if (dow === 0 || dow === 6) tr.className = 'is-weekend';
+      // Kept as a <td>: the stylesheet targets `tbody td` for padding and the
+      // weekend accent, so switching to <th> would change the visual layout. The
+      // generated inputs carry their own aria-label instead.
+      const td1 = el('td', { className: 'day-cell' });
+      td1.append(el('b', { textContent: fmtDate(day.date) }), el('span', { textContent: L().dow[dow] }));
+      const td2 = el('td'), td3 = el('td'), td4 = el('td'), td5 = el('td'), td6 = el('td');
+      td2.append(timeInput(day, 'start'));
+      td3.append(timeInput(day, 'end'));
+      const brk = el('input', { type: 'number', min: 0, step: 5, value: day.brk, placeholder: '0', className: 'input-sm', style: 'width:64px;' });
+      brk.setAttribute('aria-label', fieldName('th_break', '', day));
+      brk.addEventListener('input', () => { day.brk = brk.value; recalc(); }); td4.append(brk);
+      const tips = el('input', { type: 'number', min: 0, step: 0.01, value: day.tips, placeholder: '0', className: 'input-sm', style: 'width:72px;' });
+      tips.setAttribute('aria-label', fieldName('th_tips', '', day));
+      tips.addEventListener('input', () => { day.tips = tips.value; recalc(); }); td5.append(tips);
+      td6.className = 'worktime'; td6.dataset.k = iso(day.date); td6.textContent = '0:00';
+      // Cache the output cell so recalc() never has to query the DOM for it.
+      day.cell = td6;
+      tr.append(td1, td2, td3, td4, td5, td6); frag.append(tr);
+    });
+    tb.append(frag);
+  }
+
+  function to24(tm) {
+    let h = parseInt(tm.h, 10); if (isNaN(h)) return null;
+    let m = parseInt(tm.m, 10) || 0;
+    const is12 = $('#timeFormat').value === '12';
+    // A browser does not enforce the max attribute on typed input, so an out-of-range
+    // hour or minute is clamped here rather than producing a plausible wrong total.
+    h = Math.min(Math.max(h, 0), is12 ? 12 : 23);
+    m = Math.min(Math.max(m, 0), 59);
+    if (is12) { h = h % 12; if (tm.ap === 'pm') h += 12; }
+    return h * 60 + m;
+  }
+  function dayMinutes(day) {
+    const s = to24(day.start), e = to24(day.end);
+    if (s === null || e === null) return 0;
+    let diff = e - s; if (diff < 0) diff += 1440;
+    diff -= (parseFloat(day.brk) || 0);
+    return Math.max(0, diff);
+  }
+  const hhmm = mins => `${Math.floor(mins / 60)}:${String(Math.round(mins % 60)).padStart(2, '0')}`;
+  const dec = mins => (mins / 60).toFixed(2);
+
+  function currentOtConfig() {
+    const rule = $('#otRule').value;
+    let dailyThresh = null, dtThresh = null, weekly = false;
+    if (rule === 'weekly40') weekly = true;
+    else if (rule === 'daily') { dailyThresh = parseFloat($('#otDailyThresh').value) || null; }
+    else if (STATE_RULES[rule]) { dailyThresh = STATE_RULES[rule].daily; dtThresh = STATE_RULES[rule].dt; weekly = true; }
+    const dtOverride = parseFloat($('#dtThresh').value);
+    if (!isNaN(dtOverride)) dtThresh = dtOverride;
+    return { rule, dailyThresh, dtThresh, weekly, mult: parseFloat($('#otMult').value) || 1.5 };
+  }
+
+  let lastCalc = {};
+  function recalc() {
+    const cfg = currentOtConfig();
+    let totalMin = 0, regMin = 0, otMin = 0, dtMin = 0, tips = 0;
+    const perDay = [];
+    days.forEach(day => {
+      let mins = dayMinutes(day);
+      totalMin += mins;
+      tips += parseFloat(day.tips) || 0;
+      let dReg = mins, dOt = 0, dDt = 0;
+      if (cfg.dtThresh != null && mins > cfg.dtThresh * 60) { dDt = mins - cfg.dtThresh * 60; }
+      if (cfg.dailyThresh != null && mins > cfg.dailyThresh * 60) {
+        dOt = Math.min(mins, cfg.dtThresh != null ? cfg.dtThresh * 60 : Infinity) - cfg.dailyThresh * 60;
+        dOt = Math.max(0, dOt);
+        dReg = cfg.dailyThresh * 60;
+      } else { dReg = mins - dDt; }
+      perDay.push({ day, mins, dReg, dOt, dDt });
+    });
+    if (cfg.weekly) {
+      // The 40-hour cap is per calendar week, not per selected range: a month-long
+      // range holds several separate weeks, so the running total restarts whenever
+      // a day falls into a new week. Without this, everything after the first 40
+      // hours of the whole period is paid as overtime.
+      const ws = +$('#weekStart').value;
+      let regRunning = 0, curWeek = null;
+      perDay.forEach(p => {
+        const wk = iso(startOfWeek(p.day.date, ws));
+        if (wk !== curWeek) { curWeek = wk; regRunning = 0; }
+        const room = Math.max(0, 40 * 60 - regRunning);
+        if (p.dReg > room) { const over = p.dReg - room; p.dOt += over; p.dReg = room; }
+        regRunning += p.dReg;
+      });
+    }
+    perDay.forEach(p => {
+      regMin += p.dReg; otMin += p.dOt; dtMin += p.dDt;
+      const cell = p.day.cell;
+      if (cell) {
+        cell.textContent = hhmm(p.mins);
+        if (p.dOt + p.dDt > 0) cell.append(el('span', { className: 'ot-badge', textContent: 'OT' }));
+      }
+    });
+
+    const rate = parseFloat($('#rate').value) || 0;
+    const cur = $('#currency').value;
+    const mult = cfg.mult, dtMult = 2;
+    const regPay = (regMin / 60) * rate;
+    const otPay = (otMin / 60) * rate * mult;
+    const dtPay = (dtMin / 60) * rate * dtMult;
+    const gross = regPay + otPay + dtPay + tips;
+    const taxPct = parseFloat($('#taxPct').value) || 0;
+    const net = gross * (1 - taxPct / 100);
+    const money = v => rate > 0 || tips > 0 ? `${cur}${v.toFixed(2)}` : '—';
+
+    $('#kTotal').textContent = hhmm(totalMin);
+    $('#kReg').textContent = hhmm(regMin);
+    $('#kOt').textContent = hhmm(otMin + dtMin);
+    $('#kGross').textContent = money(gross);
+    $('#kNet').textContent = money(net);
+    $('#footHours').textContent = `${hhmm(totalMin)}  (${dec(totalMin)}h)`;
+    $('#footTips').textContent = tips > 0 ? `${cur}${tips.toFixed(2)}` : '—';
+    $('#footSpan').textContent = days.length ? `${fmtDate(days[0].date)} → ${fmtDate(days[days.length - 1].date)} · ${days.length} ${t('days_word')}` : '';
+
+    const bd = $('#breakdown'); bd.innerHTML = '';
+    const rowB = (l, v) => { const d = el('div', { className: 'breakdown-item' }); d.innerHTML = `<span>${l}</span><span class="val">${v}</span>`; return d; };
+    bd.append(rowB(t('bd_total'), `${hhmm(totalMin)} · ${dec(totalMin)}h`));
+    bd.append(rowB(t('bd_regular'), `${hhmm(regMin)} · ${dec(regMin)}h`));
+    if (otMin > 0) bd.append(rowB(fmt(t('bd_overtime'), { m: mult }), `${hhmm(otMin)} · ${money(otPay)}`));
+    if (dtMin > 0) bd.append(rowB(t('bd_doubletime'), `${hhmm(dtMin)} · ${money(dtPay)}`));
+    if (rate > 0) {
+      bd.append(rowB(t('bd_regularPay'), money(regPay)));
+      if (tips > 0) bd.append(rowB(t('bd_tips'), `${cur}${tips.toFixed(2)}`));
+      const g = el('div', { className: 'breakdown-total' }); g.innerHTML = `<span>${t('bd_gross')}</span><span class="val">${money(gross)}</span>`; bd.append(g);
+      if (taxPct > 0) bd.append(rowB(fmt(t('bd_afterTax'), { p: taxPct }), money(net)));
+    } else if (tips > 0) {
+      const g = el('div', { className: 'breakdown-total' }); g.innerHTML = `<span>${t('bd_totalTips')}</span><span class="val">${cur}${tips.toFixed(2)}</span>`; bd.append(g);
+    } else {
+      bd.append(rowB(t('bd_enterRate'), t('bd_toSeePay')));
+    }
+    lastCalc = { totalMin, regMin, otMin, dtMin, gross, net, tips, cur, rate };
+  }
+
+  function toast(msg) { const el2 = $('#toast'); el2.textContent = msg; el2.classList.add('show'); setTimeout(() => el2.classList.remove('show'), 1800); }
+
+  function buildCSV() {
+    const cur = $('#currency').value;
+    let rows = [['Date', 'Day', 'Start', 'End', 'Break(min)', 'Tips', 'Hours(hh:mm)', 'Hours(decimal)']];
+    days.forEach(d => {
+      const mins = dayMinutes(d);
+      const f = tm => tm.h !== '' ? `${tm.h}:${tm.m}${$('#timeFormat').value === '12' ? tm.ap : ''}` : '';
+      rows.push([iso(d.date), L().dow[d.date.getDay()], f(d.start), f(d.end), d.brk || 0, d.tips || 0, hhmm(mins), dec(mins)]);
+    });
+    rows.push([]);
+    rows.push(['Total hours', hhmm(lastCalc.totalMin), 'Regular', hhmm(lastCalc.regMin), 'Overtime', hhmm(lastCalc.otMin + lastCalc.dtMin)]);
+    rows.push(['Gross', cur + (lastCalc.gross || 0).toFixed(2), 'Net', cur + (lastCalc.net || 0).toFixed(2), 'Tips', cur + (lastCalc.tips || 0).toFixed(2)]);
+    // A leading = + - @ makes a spreadsheet treat the cell as a formula, so it is
+    // prefixed with an apostrophe to force text. Quoting alone does not prevent this.
+    const cell = c => {
+      let v = String(c);
+      if (/^[=+\-@\t\r]/.test(v) && !/^-?\d+(\.\d+)?$/.test(v)) v = '\'' + v;
+      return `"${v.replace(/"/g, '""')}"`;
+    };
+    return rows.map(r => r.map(cell).join(',')).join('\n');
+  }
+  function download(name, content, type) {
+    const b = new Blob([content], { type }); const u = URL.createObjectURL(b);
+    const a = el('a', { href: u, download: name }); document.body.append(a); a.click(); a.remove(); URL.revokeObjectURL(u);
+  }
+
+  function snapshot() {
+    return {
+      name: $('#listName').value || (t('entry_prefix') + ' ' + new Date().toLocaleDateString()),
+      savedAt: Date.now(),
+      settings: {
+        preset: $('#preset').value, startDate: $('#startDate').value, endDate: $('#endDate').value,
+        weekStart: $('#weekStart').value, timeFormat: $('#timeFormat').value, currency: $('#currency').value,
+        rate: $('#rate').value, otRule: $('#otRule').value, otDailyThresh: $('#otDailyThresh').value,
+        otMult: $('#otMult').value, dtThresh: $('#dtThresh').value, taxPct: $('#taxPct').value
+      },
+      days: days.map(d => ({ date: iso(d.date), start: d.start, end: d.end, brk: d.brk, tips: d.tips }))
+    };
+  }
+  function loadSaved() { try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; } catch (e) { return []; } }
+  function writeSaved(a) { localStorage.setItem(LS_KEY, JSON.stringify(a)); renderSaved(); }
+  function renderSaved() {
+    const box = $('#savedList'), arr = loadSaved();
+    box.textContent = '';
+    if (!arr.length) {
+      const empty = el('span', { className: 'body-sm', textContent: t('r_nothingSaved') });
+      empty.setAttribute('data-i18n', 'r_nothingSaved');
+      box.append(empty);
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    arr.sort((a, b) => b.savedAt - a.savedAt).forEach(s => {
+      const it = el('div', { className: 'saved-item' });
+      // Entry names can arrive from a shared #d= link, so they are inserted as
+      // text, never as markup.
+      it.append(
+        el('span', { className: 'nm truncate', textContent: s.name }),
+        el('span', { className: 'meta', textContent: new Date(s.savedAt).toLocaleDateString() })
+      );
+      const actions = el('div', { className: 'actions' });
+      const load = el('button', { type: 'button', className: 'btn btn-outline btn-xs', textContent: t('b_load') });
+      load.setAttribute('aria-label', fmt(t('a_load_entry'), { n: s.name }));
+      const del = el('button', { type: 'button', className: 'btn btn-ghost btn-icon btn-xs', title: t('ti_delete') });
+      // Icon-only button: the SVG is decorative, so the name comes from aria-label.
+      del.setAttribute('aria-label', fmt(t('a_delete_entry'), { n: s.name }));
+      del.innerHTML = TRASH_SVG;
+      load.onclick = () => applySnapshot(s);
+      del.onclick = () => { const a = loadSaved().filter(x => x.savedAt !== s.savedAt); writeSaved(a); toast(t('tt_deleted')); };
+      actions.append(load, del); it.append(actions); frag.append(it);
+    });
+    box.append(frag);
+  }
+  function applySnapshot(s) {
+    // Snapshots arrive from an untrusted #d= share link or from localStorage that
+    // another script may have corrupted, so every field is checked before use.
+    if (!s || typeof s !== 'object') return false;
+    const g = (s.settings && typeof s.settings === 'object') ? s.settings : {};
+    if (!Array.isArray(s.days)) return false;
+    // Keys can come from an untrusted #d= share link; only plain id-shaped keys
+    // are looked up so a crafted key cannot throw an invalid-selector error.
+    for (const k in g) {
+      if (!/^[A-Za-z][\w-]*$/.test(k)) continue;
+      const node = appRoot.querySelector('#' + k);
+      if (node) node.value = g[k];
+    }
+    days = s.days
+      .filter(d => d && typeof d === 'object' && /^\d{4}-\d{2}-\d{2}$/.test(String(d.date)))
+      .map(d => ({
+        date: parseISO(d.date),
+        start: normaliseTime(d.start),
+        end: normaliseTime(d.end),
+        brk: cleanNumeric(d.brk),
+        tips: cleanNumeric(d.tips)
+      }));
+    renderRows(); recalc(); toast(fmt(t('tt_loaded'), { n: String(s.name == null ? '' : s.name) }));
+    return true;
+  }
+
+  // Coerce a restored time object back into the shape the calculator expects.
+  function normaliseTime(v) {
+    const base = { h: '', m: '00', ap: 'am' };
+    if (!v || typeof v !== 'object') return base;
+    return {
+      h: cleanNumeric(v.h),
+      m: /^\d{1,2}$/.test(String(v.m)) ? String(v.m).padStart(2, '0') : '00',
+      ap: v.ap === 'pm' ? 'pm' : 'am'
+    };
+  }
+  const cleanNumeric = v => (v === 0 || (v && /^\d{0,10}(\.\d{0,4})?$/.test(String(v)))) ? String(v) : '';
+  function encodeShare() { return btoa(unescape(encodeURIComponent(JSON.stringify(snapshot())))); }
+  function tryLoadShare() {
+    const h = location.hash.replace(/^#d=/, '');
+    if (!h) return false;
+    try { applySnapshot(JSON.parse(decodeURIComponent(escape(atob(h))))); return true; } catch (e) { return false; }
+  }
+
+  /* ---------- events ---------- */
+  ['preset', 'startDate', 'endDate', 'weekStart'].forEach(id => $('#' + id).addEventListener('change', () => {
+    if (id === 'startDate' || id === 'endDate') $('#preset').value = 'custom';
+    buildDays();
+  }));
+  $('#timeFormat').addEventListener('change', () => { renderRows(); recalc(); });
+  ['currency', 'rate', 'otRule', 'otDailyThresh', 'otMult', 'dtThresh', 'taxPct'].forEach(id => $('#' + id).addEventListener('input', recalc));
+
+  $('#bulkFill').onclick = () => {
+    const is12 = $('#timeFormat').value === '12';
+    const sh = prompt(t('pr_startTime'), is12 ? '9:00 am' : '09:00');
+    if (sh === null) return;
+    const eh = prompt(t('pr_endTime'), is12 ? '5:00 pm' : '17:00');
+    if (eh === null) return;
+    const br = prompt(t('pr_break'), '60'); if (br === null) return;
+    const skipWknd = confirm(t('pr_skipWknd'));
+    const parse = str => {
+      const m = str.trim().match(/(\d{1,2}):?(\d{0,2})\s*(am|pm)?/i);
+      if (!m) return null; let h = +m[1], mm = m[2] ? m[2].padStart(2, '0') : '00', ap = (m[3] || '').toLowerCase();
+      if ($('#timeFormat').value === '12') { if (!ap) { ap = h < 12 ? 'am' : 'pm'; if (h > 12) h -= 12; } return { h: String(h), m: mm, ap }; }
+      return { h: String(h), m: mm, ap: 'am' };
+    };
+    const S = parse(sh), E = parse(eh); if (!S || !E) { toast(t('tt_parseErr')); return; }
+    days.forEach(d => {
+      if (skipWknd && (d.date.getDay() === 0 || d.date.getDay() === 6)) return;
+      d.start = { ...S }; d.end = { ...E }; d.brk = br;
+    });
+    renderRows(); recalc(); toast(fmt(t('tt_filled'), { n: days.length }));
+  };
+  $('#clearAll').onclick = () => { days.forEach(d => { d.start = { h: '', m: '00', ap: 'am' }; d.end = { h: '', m: '00', ap: 'am' }; d.brk = ''; d.tips = ''; }); renderRows(); recalc(); toast(t('tt_cleared')); };
+  $('#saveBtn').onclick = () => { const a = loadSaved(); a.push(snapshot()); writeSaved(a); toast(t('tt_saved')); };
+  $('#csvBtn').onclick = () => {
+    // The label is free text and becomes a filename, so reduce it to safe characters.
+    const safe = ($('#listName').value || '')
+      .replace(/[^\w\u00C0-\u017F .-]+/g, '-')
+      .replace(/^[-.]+|[-.]+$/g, '')
+      .slice(0, 80);
+    download((safe || 'horas-trabalhadas') + '.csv', buildCSV(), 'text/csv');
+    toast(t('tt_csv'));
+  };
+  $('#printBtn').onclick = () => window.print();
+  $('#shareBtn').onclick = () => {
+    const url = location.origin + location.pathname + '#d=' + encodeShare();
+    if (navigator.clipboard) navigator.clipboard.writeText(url).then(() => toast(t('tt_linkCopied')), () => prompt(t('pr_copyLink'), url));
+    else prompt(t('pr_copyLink'), url);
+  };
+
+  const topBtn = $('#htrb-top');
+  if (topBtn) topBtn.addEventListener('click', () => {
+    const y = appRoot.getBoundingClientRect().top + window.pageYOffset - 16;
+    window.scrollTo({ top: y < 0 ? 0 : y, behavior: 'smooth' });
+  });
+
+  const tt = $('#themeToggle');
+  const setTheme = d => { appRoot.dataset.theme = d ? 'dark' : 'light'; tt.checked = d; localStorage.setItem(LS_THEME, d ? '1' : '0'); };
+  tt.onchange = () => setTheme(tt.checked);
+  setTheme(localStorage.getItem(LS_THEME) === '1' || (localStorage.getItem(LS_THEME) === null && matchMedia('(prefers-color-scheme:dark)').matches));
+
+  /* ---------- init ---------- */
+  // Seed the week-start selector from the WordPress site setting before the first
+  // render, so the presets match how this site defines a week.
+  if (typeof CFG.weekStart === 'number') {
+    const wsSel = $('#weekStart');
+    const wsVal = String(CFG.weekStart);
+    if (wsSel && Array.prototype.some.call(wsSel.options, o => o.value === wsVal)) wsSel.value = wsVal;
+  }
+
+  langSel = $('#htrb-lang');
+  LOCALE = detectLocale();
+  if (langSel) { langSel.value = LOCALE; langSel.addEventListener('change', () => setLocale(langSel.value, true)); }
+  applyI18n();
+  $('#currency').value = CUR_DEFAULT[LOCALE] || '$';
+
+  renderSaved();
+  if (!tryLoadShare()) buildDays(false);
+})();

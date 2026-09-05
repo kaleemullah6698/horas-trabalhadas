@@ -1,0 +1,19 @@
+{
+  "name": "horas-trabalhadas",
+  "version": "2.0.0",
+  "description": "Calculadora de horas trabalhadas e folha de ponto para WordPress.",
+  "private": true,
+  "license": "GPL-2.0-or-later",
+  "scripts": {
+    "build": "node tools/build-assets.js",
+    "build:check": "node tools/build-assets.js --check",
+    "build:zip": "node tools/build-zip.js",
+    "check:branding": "node tools/check-branding.js",
+    "check:version": "node tools/check-version.js",
+    "check:structure": "node tools/check-structure.js",
+    "test": "npm run check:version && npm run check:branding && npm run check:structure && npm run check:php && npm run build:check && npm run test:calc",
+    "check:php": "node tools/check-php-balance.js",
+    "make:pot": "node tools/make-pot.js",
+    "test:calc": "node tools/test-calculator.js"
+  }
+}

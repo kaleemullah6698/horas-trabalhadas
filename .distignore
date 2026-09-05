@@ -1,0 +1,13 @@
+# Files excluded from the distribution ZIP. Anything listed here is a
+# development or CI artefact and must never reach a customer's site.
+.git
+.github
+.gitignore
+.distignore
+node_modules
+dist
+tools
+docs
+package.json
+package-lock.json
+CHANGELOG.md

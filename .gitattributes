@@ -1,0 +1,31 @@
+# Normalise every text file to LF inside the repository.
+#
+# This matters for more than tidiness: the CI job regenerates styles.min.css and
+# app.min.js and compares them byte-for-byte with the committed files. Without a
+# fixed line ending, a Windows checkout and a Linux runner would disagree and the
+# build would fail for no real reason.
+* text=auto eol=lf
+
+# Binary assets must never be line-ending converted.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.zip binary
+*.mo binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+
+# Keep development files out of GitHub's auto-generated source archives, so the
+# zipball fallback stays close to the real distribution package.
+/.github        export-ignore
+/tools          export-ignore
+/docs           export-ignore
+/.gitignore     export-ignore
+/.gitattributes export-ignore
+/.distignore    export-ignore
+/package.json   export-ignore
+/CHANGELOG.md   export-ignore

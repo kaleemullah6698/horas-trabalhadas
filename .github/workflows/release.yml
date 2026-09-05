@@ -1,0 +1,90 @@
+name: Release
+
+# Triggered by pushing a version tag, e.g. `git tag v2.0.1 && git push origin v2.0.1`.
+#
+# The job validates the code, proves the tag matches the version inside the
+# plugin, builds the WordPress distribution package and publishes it as a release
+# asset named horas-trabalhadas.zip. That exact asset name is what the in-plugin
+# updater looks for, so renaming it here would silently stop updates being
+# offered to installed sites.
+#
+# No secret is configured or needed: GITHUB_TOKEN is issued automatically to the
+# job by GitHub Actions and is scoped to this repository alone. There is no
+# personal access token anywhere in this repository or in the shipped plugin.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      - name: Lint every PHP file
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do php -l "$file"; done \
+            < <(find . -name '*.php' -not -path './node_modules/*' -not -path './dist/*' -print0)
+
+      - name: Tag must match the plugin version
+        run: node tools/check-version.js "${GITHUB_REF_NAME}"
+
+      - name: No retired branding and no leaked credentials
+        run: node tools/check-branding.js
+
+      - name: Plugin structure is valid
+        run: node tools/check-structure.js
+
+      - name: Minified assets match their sources
+        run: node tools/build-assets.js --check
+
+      - name: Calculator smoke test
+        run: node tools/test-calculator.js
+
+      - name: JavaScript parses
+        run: |
+          node --check assets/js/app.js
+          node --check assets/js/app.min.js
+
+      - name: Build the distribution package
+        run: node tools/build-zip.js
+
+      - name: Verify the archive layout WordPress requires
+        run: |
+          set -euo pipefail
+          # Exactly one top-level directory, and it must be the plugin slug.
+          top=$(unzip -l dist/horas-trabalhadas.zip | awk 'NR>3 && $4 != "" {print $4}' | cut -d/ -f1 | sort -u | grep -v '^-*$')
+          echo "top-level entries: $top"
+          test "$top" = "horas-trabalhadas"
+          # The main plugin file must sit directly inside it.
+          unzip -l dist/horas-trabalhadas.zip | grep -q 'horas-trabalhadas/horas-trabalhadas.php'
+          echo 'ok: archive layout is correct'
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Horas Trabalhadas ${{ github.ref_name }}
+          files: dist/horas-trabalhadas.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

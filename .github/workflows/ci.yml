@@ -1,0 +1,90 @@
+name: CI
+
+# Runs on every push and pull request. Nothing here needs a secret: the checks
+# are all local to the repository, which is deliberate — a workflow that needs a
+# credential to validate the code is a workflow contributors cannot run.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  php:
+    name: PHP syntax (${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest version the plugin header claims to support, and a current one.
+        php: ['7.2', '8.3']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - name: Lint every PHP file
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r -d '' file; do
+            php -l "$file"
+            found=$((found + 1))
+          done < <(find . -name '*.php' -not -path './node_modules/*' -not -path './dist/*' -print0)
+          echo "linted $found PHP files"
+          test "$found" -gt 0
+
+  checks:
+    name: Structure, branding and version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Version is consistent across header, constant and readme
+        run: node tools/check-version.js
+
+      - name: No retired branding and no leaked credentials
+        run: node tools/check-branding.js
+
+      - name: Plugin structure is valid
+        run: node tools/check-structure.js
+
+      - name: Minified assets match their sources
+        run: node tools/build-assets.js --check
+
+      - name: Calculator smoke test
+        run: node tools/test-calculator.js
+
+      - name: JavaScript parses
+        run: |
+          node --check assets/js/app.js
+          node --check assets/js/app.min.js
+
+      - name: Distribution package builds with the correct layout
+        run: |
+          node tools/build-zip.js
+          echo '--- archive contents (top two levels) ---'
+          unzip -l dist/horas-trabalhadas.zip | awk '{print $4}' | grep -v '^$' | cut -d/ -f1-2 | sort -u
+
+      - name: Package excludes development files
+        run: |
+          set -euo pipefail
+          for forbidden in horas-trabalhadas/tools horas-trabalhadas/.github horas-trabalhadas/node_modules horas-trabalhadas/package.json horas-trabalhadas/.distignore; do
+            if unzip -l dist/horas-trabalhadas.zip | grep -q "$forbidden"; then
+              echo "FAIL: $forbidden was shipped in the distribution package"
+              exit 1
+            fi
+          done
+          echo 'ok: no development files in the package'
