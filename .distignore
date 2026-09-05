@@ -3,6 +3,7 @@
 .git
 .github
 .gitignore
+.gitattributes
 .distignore
 node_modules
 dist

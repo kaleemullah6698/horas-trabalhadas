@@ -4,7 +4,7 @@ Tags: horas trabalhadas, folha de ponto, cartao de ponto, horas extras, calculad
 Requires at least: 5.6
 Tested up to: 6.6
 Requires PHP: 7.2
-Stable tag: 2.0.0
+Stable tag: 2.0.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -65,6 +65,10 @@ Sim. A calculadora funciona integralmente sem licença. A licença controla apen
 
 == Changelog ==
 
+= 2.0.1 =
+* Licença do repositório alinhada com a declarada pelo plugin (GPL-2.0-or-later).
+* Arquivo de desenvolvimento .gitattributes deixa de ser incluído no pacote distribuído.
+
 = 2.0.0 =
 * Produto renomeado para **Horas Trabalhadas**; toda a interface administrativa passa a ser em português do Brasil.
 * Os períodos passam a usar o fuso horário configurado no WordPress em vez do fuso do dispositivo do visitante.
@@ -80,6 +84,9 @@ Sim. A calculadora funciona integralmente sem licença. A licença controla apen
 * Versão anterior do produto.
 
 == Upgrade Notice ==
+
+= 2.0.1 =
+Correções de empacotamento e licenciamento. Nenhuma alteração de cálculo.
 
 = 2.0.0 =
 Atualização recomendada. Corrige o cálculo de horas extras semanais em períodos maiores que uma semana e passa a usar o fuso horário do site. As folhas de ponto salvas no navegador são migradas automaticamente.

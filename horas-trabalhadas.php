@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Horas Trabalhadas
  * Description:       Calculadora de horas trabalhadas e folha de ponto: intervalos, horas extras, dobro de horas, gorjetas, pagamento bruto e líquido, exportação CSV, impressão e link compartilhável. Publique em qualquer página com o shortcode [horas_trabalhadas].
- * Version:           2.0.0
+ * Version:           2.0.1
  * Requires at least: 5.6
  * Requires PHP:      7.2
  * Author:            Horas Trabalhadas
@@ -35,7 +35,7 @@ if ( ! defined( 'ABSPATH' ) ) {
  * the build if this value ever disagrees with readme.txt or the release tag.
  * ---------------------------------------------------------------------------
  */
-define( 'HORAS_TRABALHADAS_VERSION', '2.0.0' );
+define( 'HORAS_TRABALHADAS_VERSION', '2.0.1' );
 define( 'HORAS_TRABALHADAS_FILE', __FILE__ );
 define( 'HORAS_TRABALHADAS_PATH', plugin_dir_path( __FILE__ ) );
 define( 'HORAS_TRABALHADAS_URL', plugin_dir_url( __FILE__ ) );

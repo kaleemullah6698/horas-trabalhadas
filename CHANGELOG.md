@@ -3,6 +3,18 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 Versionamento semântico: MAJOR.MINOR.PATCH.
 
+## [2.0.1]
+
+Correções de empacotamento e licenciamento. Nenhuma alteração no cálculo de
+horas, no comportamento da calculadora ou nos dados armazenados.
+
+### Corrigido
+- A licença do repositório era MIT enquanto o cabeçalho do plugin, o readme.txt
+  e o package.json declaravam GPL-2.0-or-later. O arquivo LICENSE passa a ser o
+  texto oficial da GPL-2.0, alinhado com o que o código sempre declarou.
+- O arquivo de desenvolvimento .gitattributes era incluído no pacote distribuído;
+  agora está listado no .distignore e não é mais enviado aos sites dos clientes.
+
 ## [2.0.0]
 
 Versão maior: o produto foi renomeado e a pasta do plugin mudou, portanto a
